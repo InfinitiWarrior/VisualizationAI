@@ -1,11 +1,36 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
+  <meta charset="UTF-8" />
+  <title>VisualizationAI</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-    
+  <div class="container">
+    <h1>VisualizationAI</h1>
+    <p>Turn messy tasks into clear, human-approved workflows.</p>
+
+    <div class="panel">
+      <textarea id="taskInput" placeholder="Describe a task, e.g.:
+Open dashboard, find ticket, read permissions, request access..."></textarea>
+      <button id="generateBtn">Generate Workflow</button>
+    </div>
+
+    <div class="grid">
+      <div class="panel">
+        <h2>Workflow Diagram</h2>
+        <div id="diagram" class="mermaid"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Steps</h2>
+        <ul id="steps"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
 </body>
+
 </html>
