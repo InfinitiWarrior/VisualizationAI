@@ -13,14 +13,14 @@ const diagramEl = document.getElementById("diagram");
 
 // State
 let lastWorkflow = null;
+let isExtending = false;
 let activeRequestId = 0;
 
 /* -------------------------------------------------
-   STEPS → CANONICAL MERMAID
+   STEPS → MERMAID
 ------------------------------------------------- */
 function stepsToMermaid(steps) {
-  const lines = [];
-  lines.push("graph TD");
+  const lines = ["graph TD"];
 
   steps.forEach((step, index) => {
     const id = `S${step.id}`;
@@ -56,23 +56,26 @@ async function renderMermaid(source) {
 }
 
 /* -------------------------------------------------
-   WORKFLOW ACTIONS
+   SUBMIT (generate OR extend)
 ------------------------------------------------- */
-async function generateWorkflow() {
-  const task = input.value.trim();
-  if (!task) return;
+async function submit() {
+  const text = input.value.trim();
+  if (!text) return;
 
   const requestId = ++activeRequestId;
 
-  status.textContent = "Planning workflow...";
-  diagramEl.innerHTML = "";
-  lastWorkflow = null;
+  status.textContent = isExtending
+    ? "Extending workflow..."
+    : "Planning workflow...";
 
   try {
     const res = await fetch("http://127.0.0.1:8000/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task })
+      body: JSON.stringify({
+        task: text,
+        existing_steps: isExtending ? lastWorkflow : null
+      })
     });
 
     if (!res.ok) throw new Error("Backend error");
@@ -80,11 +83,25 @@ async function generateWorkflow() {
     const data = await res.json();
     if (data.error) throw new Error(data.error);
 
-    // Ignore stale responses after New Workflow
     if (requestId !== activeRequestId) return;
 
-    lastWorkflow = data.steps;
-    status.textContent = `Generated ${lastWorkflow.length} steps`;
+    if (!isExtending) {
+      // First submit → replace workflow
+      lastWorkflow = data.steps;
+      isExtending = true;
+    } else {
+      // Extend → append steps
+      const offset = lastWorkflow.length;
+      data.steps.forEach((s, i) => {
+        lastWorkflow.push({
+          ...s,
+          id: offset + i + 1
+        });
+      });
+    }
+
+    input.value = "";
+    status.textContent = `Workflow has ${lastWorkflow.length} steps`;
 
     exportMdBtn.disabled = false;
     exportJsonBtn.disabled = false;
@@ -97,19 +114,18 @@ async function generateWorkflow() {
   }
 }
 
+/* -------------------------------------------------
+   NEW WORKFLOW
+------------------------------------------------- */
 function newWorkflow() {
-  // Invalidate any in-flight requests
   activeRequestId++;
-
-  // Reset state
   lastWorkflow = null;
+  isExtending = false;
 
-  // Clear UI
   input.value = "";
   diagramEl.innerHTML = "";
   status.textContent = "New workflow started";
 
-  // Disable exports until new generation
   exportMdBtn.disabled = true;
   exportJsonBtn.disabled = true;
 }
@@ -127,7 +143,6 @@ function download(blob, filename) {
 
 exportJsonBtn.onclick = () => {
   if (!lastWorkflow) return;
-
   download(
     new Blob(
       [JSON.stringify({ steps: lastWorkflow }, null, 2)],
@@ -156,7 +171,7 @@ exportMdBtn.onclick = () => {
 /* -------------------------------------------------
    EVENTS
 ------------------------------------------------- */
-generateBtn.onclick = generateWorkflow;
+generateBtn.onclick = submit;
 newWorkflowBtn.onclick = newWorkflow;
 
 /* -------------------------------------------------
