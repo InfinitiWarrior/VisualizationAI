@@ -3,34 +3,47 @@
 <head>
   <meta charset="UTF-8" />
   <title>VisualizationAI</title>
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <link rel="stylesheet" href="styles.css" />
+
+  <!-- Mermaid -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({ startOnLoad: false });
+  </script>
 </head>
 <body>
   <div class="container">
     <h1>VisualizationAI</h1>
-    <p>Turn messy tasks into clear, human-approved workflows.</p>
+    <p>Describe a task or refine an existing workflow.</p>
 
+    <!-- SINGLE INPUT PANEL -->
     <div class="panel">
-      <textarea id="taskInput" placeholder="Describe a task, e.g.:
-Open dashboard, find ticket, read permissions, request access..."></textarea>
-      <button id="generateBtn">Generate Workflow</button>
+      <textarea
+        id="taskInput"
+        placeholder="Describe a task, or tell the AI how to extend the workflow..."
+      ></textarea>
+
+      <div class="controls">
+        <div>
+          <button id="generateBtn">Submit</button>
+          <button id="newWorkflowBtn">New workflow</button>
+        </div>
+
+        <div class="export-buttons">
+          <button id="exportMdBtn">Export MD</button>
+          <button id="exportJsonBtn">Export JSON</button>
+        </div>
+      </div>
+
+      <div id="status"></div>
     </div>
 
-    <div class="grid">
-      <div class="panel">
-        <h2>Workflow Diagram</h2>
-        <div id="diagram" class="mermaid"></div>
-      </div>
-
-      <div class="panel">
-        <h2>Steps</h2>
-        <ul id="steps"></ul>
-      </div>
+    <!-- DIAGRAM -->
+    <div class="panel">
+      <div id="diagram"></div>
     </div>
   </div>
 
   <script src="script.js"></script>
 </body>
-
 </html>
