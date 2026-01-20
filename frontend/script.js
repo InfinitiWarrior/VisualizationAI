@@ -6,6 +6,8 @@ const generateBtn = document.getElementById("generateBtn");
 const newWorkflowBtn = document.getElementById("newWorkflowBtn");
 const exportMdBtn = document.getElementById("exportMdBtn");
 const exportJsonBtn = document.getElementById("exportJsonBtn");
+const undoBtn = document.getElementById("undoBtn");
+const redoBtn = document.getElementById("redoBtn");
 
 const input = document.getElementById("taskInput");
 const status = document.getElementById("status");
@@ -15,6 +17,47 @@ const diagramEl = document.getElementById("diagram");
 let lastWorkflow = null;
 let isExtending = false;
 let activeRequestId = 0;
+
+// Undo / Redo state
+let history = [];
+let future = [];
+
+/* -------------------------------------------------
+   UNDO HELPERS
+------------------------------------------------- */
+function snapshot() {
+  if (!lastWorkflow) return;
+  history.push(JSON.parse(JSON.stringify(lastWorkflow)));
+  future.length = 0;
+  updateUndoButtons();
+}
+
+function undo() {
+  if (!history.length) return;
+
+  future.push(JSON.parse(JSON.stringify(lastWorkflow)));
+  lastWorkflow = history.pop();
+
+  status.textContent = "Undo";
+  renderMermaid(stepsToMermaid(lastWorkflow));
+  updateUndoButtons();
+}
+
+function redo() {
+  if (!future.length) return;
+
+  history.push(JSON.parse(JSON.stringify(lastWorkflow)));
+  lastWorkflow = future.pop();
+
+  status.textContent = "Redo";
+  renderMermaid(stepsToMermaid(lastWorkflow));
+  updateUndoButtons();
+}
+
+function updateUndoButtons() {
+  undoBtn.disabled = history.length === 0;
+  redoBtn.disabled = future.length === 0;
+}
 
 /* -------------------------------------------------
    STEPS → MERMAID
@@ -85,6 +128,9 @@ async function submit() {
 
     if (requestId !== activeRequestId) return;
 
+    // SNAPSHOT BEFORE MUTATION (UNDO SAFETY)
+    if (lastWorkflow) snapshot();
+
     if (!isExtending) {
       // First submit → replace workflow
       lastWorkflow = data.steps;
@@ -107,6 +153,7 @@ async function submit() {
     exportJsonBtn.disabled = false;
 
     await renderMermaid(stepsToMermaid(lastWorkflow));
+    updateUndoButtons();
   } catch (err) {
     if (requestId !== activeRequestId) return;
     status.textContent = "Error";
@@ -122,12 +169,17 @@ function newWorkflow() {
   lastWorkflow = null;
   isExtending = false;
 
+  history = [];
+  future = [];
+
   input.value = "";
   diagramEl.innerHTML = "";
   status.textContent = "New workflow started";
 
   exportMdBtn.disabled = true;
   exportJsonBtn.disabled = true;
+
+  updateUndoButtons();
 }
 
 /* -------------------------------------------------
@@ -173,9 +225,12 @@ exportMdBtn.onclick = () => {
 ------------------------------------------------- */
 generateBtn.onclick = submit;
 newWorkflowBtn.onclick = newWorkflow;
+undoBtn.onclick = undo;
+redoBtn.onclick = redo;
 
 /* -------------------------------------------------
    INIT
 ------------------------------------------------- */
 exportMdBtn.disabled = true;
 exportJsonBtn.disabled = true;
+updateUndoButtons();
