@@ -24,7 +24,6 @@ if not API_KEY:
 # -------------------------------------------------
 app = FastAPI(title="VisualizationAI Backend")
 
-# Allow browser access (local dev / hackathon)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,21 +43,37 @@ class PlanRequest(BaseModel):
 SYSTEM_PROMPT = """
 You are a workflow planning system.
 
-Break the task into MULTIPLE clear, ordered steps.
+Break the task into a structured workflow that MAY include decisions.
 
 RULES:
 - Always return AT LEAST 3 steps
-- Each step must be a distinct user action
+- Steps may be either:
+  - action (single next step)
+  - decision (if/else branching)
+- Decision steps MUST have:
+  - type: "decision"
+  - branches: { "yes": <step id>, "no": <step id> }
+- Action steps MUST have:
+  - type: "action"
+  - next: <step id> or null
+- All step IDs must be unique integers
+- Branches MUST eventually rejoin the flow
 - Mark steps that require human approval
-- Do NOT collapse the task into one step
 
 Output ONLY valid JSON.
-No explanations. No markdown. No <think> blocks.
+No explanations. No markdown.
 
 JSON format:
 {
   "steps": [
-    { "id": 1, "text": "string", "approval": true | false }
+    {
+      "id": 1,
+      "text": "string",
+      "type": "action | decision",
+      "approval": true | false,
+      "next": number | null,
+      "branches": { "yes": number, "no": number } | null
+    }
   ]
 }
 """
@@ -67,41 +82,29 @@ JSON format:
 # Helpers
 # -------------------------------------------------
 def extract_plan_json(text: str):
-    """
-    First try to parse the entire response as JSON.
-    If that fails, fall back to searching for a JSON object
-    that contains a top-level 'steps' array.
-    """
-
-    #Try direct parse (BEST CASE)
     try:
         obj = json.loads(text)
-        if isinstance(obj, dict) and "steps" in obj and isinstance(obj["steps"], list):
+        if isinstance(obj, dict) and isinstance(obj.get("steps"), list):
             return obj
     except json.JSONDecodeError:
         pass
 
-    #Fallback: search for embedded JSON blocks
     candidates = re.findall(r"\{[\s\S]*?\}", text)
-
     for candidate in candidates:
         try:
             obj = json.loads(candidate)
-            if isinstance(obj, dict) and "steps" in obj and isinstance(obj["steps"], list):
+            if isinstance(obj, dict) and isinstance(obj.get("steps"), list):
                 return obj
         except json.JSONDecodeError:
             continue
 
     raise ValueError("No valid plan JSON with 'steps' array found")
 
-
 # -------------------------------------------------
 # Routes
 # -------------------------------------------------
 @app.post("/plan")
 def plan(req: PlanRequest):
-    task = req.task
-
     payload = {
         "model": "Qwen/Qwen2.5-7B-Instruct",
         "temperature": 0.3,
@@ -112,7 +115,7 @@ def plan(req: PlanRequest):
                 "role": "user",
                 "content": f"""
 Task:
-{task}
+{req.task}
 
 Break this into a step-by-step workflow.
 """
@@ -120,26 +123,58 @@ Break this into a step-by-step workflow.
         ]
     }
 
+    response = None
+
     # Retry once if Featherless is flaky
     for _ in range(2):
-        response = requests.post(
-            API_URL,
-            headers={
-                "Authorization": f"Bearer {API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json=payload,
-            timeout=60
-        )
+        try:
+            response = requests.post(
+                API_URL,
+                headers={
+                    "Authorization": f"Bearer {API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json=payload,
+                timeout=60
+            )
+        except requests.RequestException as e:
+            # Network / DNS / timeout error
+            return {
+                "error": "AI service unreachable",
+                "details": str(e),
+                "steps": []
+            }
 
         if response.status_code != 503:
             break
 
         time.sleep(1)
 
-    response.raise_for_status()
+    # 🔒 DO NOT CRASH ON AI FAILURE
+    if response is None or response.status_code >= 500:
+        return {
+            "error": "AI service unavailable",
+            "details": f"Upstream error {response.status_code if response else 'no response'}",
+            "steps": []
+        }
 
-    raw = response.json()["choices"][0]["message"]["content"]
+    # Handle non-200 cleanly
+    if response.status_code != 200:
+        return {
+            "error": "AI request failed",
+            "details": response.text,
+            "steps": []
+        }
+
+    # Parse model output safely
+    try:
+        raw = response.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return {
+            "error": "Invalid AI response format",
+            "details": str(e),
+            "steps": []
+        }
 
     try:
         return extract_plan_json(raw)
@@ -147,5 +182,6 @@ Break this into a step-by-step workflow.
         return {
             "error": "Failed to extract JSON",
             "details": str(e),
-            "raw": raw
+            "raw": raw,
+            "steps": []
         }

@@ -1,7 +1,14 @@
-// Mermaid setup
-mermaid.initialize({ startOnLoad: false });
+/* -------------------------------------------------
+   MERMAID INIT
+------------------------------------------------- */
+mermaid.initialize({
+  startOnLoad: false,
+  flowchart: { curve: "basis" }
+});
 
-// DOM elements
+/* -------------------------------------------------
+   DOM ELEMENTS
+------------------------------------------------- */
 const generateBtn = document.getElementById("generateBtn");
 const newWorkflowBtn = document.getElementById("newWorkflowBtn");
 const exportMdBtn = document.getElementById("exportMdBtn");
@@ -13,45 +20,35 @@ const input = document.getElementById("taskInput");
 const status = document.getElementById("status");
 const diagramEl = document.getElementById("diagram");
 
-// State
-let lastWorkflow = null;
-let isExtending = false;
-let activeRequestId = 0;
-
-// Undo / Redo state
+/* -------------------------------------------------
+   STATE (FRONTEND IS SOURCE OF TRUTH)
+------------------------------------------------- */
+let workflow = { steps: [] };
 let history = [];
 let future = [];
+let activeRequestId = 0;
 
 /* -------------------------------------------------
-   UNDO HELPERS
+   UNDO / REDO
 ------------------------------------------------- */
 function snapshot() {
-  if (!lastWorkflow) return;
-  history.push(JSON.parse(JSON.stringify(lastWorkflow)));
+  history.push(JSON.parse(JSON.stringify(workflow)));
   future.length = 0;
   updateUndoButtons();
 }
 
 function undo() {
   if (!history.length) return;
-
-  future.push(JSON.parse(JSON.stringify(lastWorkflow)));
-  lastWorkflow = history.pop();
-
-  status.textContent = "Undo";
-  renderMermaid(stepsToMermaid(lastWorkflow));
-  updateUndoButtons();
+  future.push(JSON.parse(JSON.stringify(workflow)));
+  workflow = history.pop();
+  render();
 }
 
 function redo() {
   if (!future.length) return;
-
-  history.push(JSON.parse(JSON.stringify(lastWorkflow)));
-  lastWorkflow = future.pop();
-
-  status.textContent = "Redo";
-  renderMermaid(stepsToMermaid(lastWorkflow));
-  updateUndoButtons();
+  history.push(JSON.parse(JSON.stringify(workflow)));
+  workflow = future.pop();
+  render();
 }
 
 function updateUndoButtons() {
@@ -60,30 +57,48 @@ function updateUndoButtons() {
 }
 
 /* -------------------------------------------------
-   STEPS → MERMAID
+   ID SAFETY (AI CANNOT OVERWRITE)
 ------------------------------------------------- */
-function stepsToMermaid(steps) {
+function nextId() {
+  return (
+    Math.max(0, ...workflow.steps.map(s => s.id)) + 1
+  );
+}
+
+/* -------------------------------------------------
+   WORKFLOW → MERMAID
+------------------------------------------------- */
+function workflowToMermaid() {
   const lines = ["graph TD"];
 
-  steps.forEach((step, index) => {
+  for (const step of workflow.steps) {
     const id = `S${step.id}`;
     const label = step.text.replace(/"/g, "'");
 
-    lines.push(`  ${id}["${label}"]`);
+    if (step.type === "decision") {
+      lines.push(`  ${id}{"${label}"}`);
 
-    if (index > 0) {
-      lines.push(`  S${steps[index - 1].id} --> ${id}`);
+      if (step.branches?.yes)
+        lines.push(`  ${id} -- Yes --> S${step.branches.yes}`);
+      if (step.branches?.no)
+        lines.push(`  ${id} -- No --> S${step.branches.no}`);
+    } else {
+      lines.push(`  ${id}["${label}"]`);
+
+      if (step.next)
+        lines.push(`  ${id} --> S${step.next}`);
     }
-  });
+  }
 
-  if (steps.some(s => s.approval)) {
+  const approvals = workflow.steps.filter(s => s.approval);
+  if (approvals.length) {
     lines.push("");
     lines.push(
-      "  classDef approval fill:#ffe4e1,stroke:#f87171,stroke-width:2px;"
+      "  classDef approval fill:#fff1f2,stroke:#e11d48,stroke-width:2px;"
     );
-    steps
-      .filter(s => s.approval)
-      .forEach(s => lines.push(`  class S${s.id} approval;`));
+    approvals.forEach(s =>
+      lines.push(`  class S${s.id} approval;`)
+    );
   }
 
   return lines.join("\n");
@@ -92,68 +107,77 @@ function stepsToMermaid(steps) {
 /* -------------------------------------------------
    RENDER
 ------------------------------------------------- */
-async function renderMermaid(source) {
+async function render() {
   diagramEl.innerHTML = "";
-  const { svg } = await mermaid.render("workflowDiagram", source);
+
+  if (!workflow.steps.length) {
+    status.textContent = "Empty workflow";
+    exportMdBtn.disabled = true;
+    exportJsonBtn.disabled = true;
+    updateUndoButtons();
+    return;
+  }
+
+  const source = workflowToMermaid();
+  const { svg } = await mermaid.render(
+    "workflowDiagram",
+    source
+  );
   diagramEl.innerHTML = svg;
+
+  status.textContent = `Workflow has ${workflow.steps.length} steps`;
+  exportMdBtn.disabled = false;
+  exportJsonBtn.disabled = false;
+  updateUndoButtons();
 }
 
 /* -------------------------------------------------
-   SUBMIT (generate OR extend)
+   SUBMIT (APPEND-ONLY AI SUGGESTIONS)
 ------------------------------------------------- */
 async function submit() {
   const text = input.value.trim();
   if (!text) return;
 
   const requestId = ++activeRequestId;
-
-  status.textContent = isExtending
-    ? "Extending workflow..."
-    : "Planning workflow...";
+  status.textContent = "AI suggesting additions...";
 
   try {
     const res = await fetch("http://127.0.0.1:8000/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        task: text,
-        existing_steps: isExtending ? lastWorkflow : null
-      })
+      body: JSON.stringify({ task: text })
     });
 
     if (!res.ok) throw new Error("Backend error");
 
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-
     if (requestId !== activeRequestId) return;
 
-    // SNAPSHOT BEFORE MUTATION (UNDO SAFETY)
-    if (lastWorkflow) snapshot();
+    if (!Array.isArray(data.steps)) {
+      status.textContent = "No valid steps returned";
+      return;
+    }
 
-    if (!isExtending) {
-      // First submit → replace workflow
-      lastWorkflow = data.steps;
-      isExtending = true;
-    } else {
-      // Extend → append steps
-      const offset = lastWorkflow.length;
-      data.steps.forEach((s, i) => {
-        lastWorkflow.push({
-          ...s,
-          id: offset + i + 1
-        });
-      });
+    snapshot();
+
+    // 🔒 HARD GUARANTEE: AI CANNOT OVERWRITE
+    for (const raw of data.steps) {
+      const step = {
+        id: nextId(),               // frontend owns IDs
+        text: raw.text ?? "New step",
+        type: raw.type ?? "action",
+        approval: !!raw.approval,
+        next: raw.next ?? null,
+        branches: raw.branches ?? null
+      };
+
+      workflow.steps.push(step);
     }
 
     input.value = "";
-    status.textContent = `Workflow has ${lastWorkflow.length} steps`;
+    await render();
 
-    exportMdBtn.disabled = false;
-    exportJsonBtn.disabled = false;
-
-    await renderMermaid(stepsToMermaid(lastWorkflow));
-    updateUndoButtons();
   } catch (err) {
     if (requestId !== activeRequestId) return;
     status.textContent = "Error";
@@ -166,9 +190,7 @@ async function submit() {
 ------------------------------------------------- */
 function newWorkflow() {
   activeRequestId++;
-  lastWorkflow = null;
-  isExtending = false;
-
+  workflow = { steps: [] };
   history = [];
   future = [];
 
@@ -178,7 +200,6 @@ function newWorkflow() {
 
   exportMdBtn.disabled = true;
   exportJsonBtn.disabled = true;
-
   updateUndoButtons();
 }
 
@@ -194,10 +215,9 @@ function download(blob, filename) {
 }
 
 exportJsonBtn.onclick = () => {
-  if (!lastWorkflow) return;
   download(
     new Blob(
-      [JSON.stringify({ steps: lastWorkflow }, null, 2)],
+      [JSON.stringify(workflow, null, 2)],
       { type: "application/json" }
     ),
     "workflow.json"
@@ -205,14 +225,13 @@ exportJsonBtn.onclick = () => {
 };
 
 exportMdBtn.onclick = () => {
-  if (!lastWorkflow) return;
-
   let md = "# Workflow\n\n";
-  lastWorkflow.forEach(s => {
-    md += `- **${s.id}. ${s.text}**${
-      s.approval ? " (approval required)" : ""
-    }\n`;
-  });
+  for (const s of workflow.steps) {
+    md += `- **${s.id}. ${s.text}**`;
+    if (s.type === "decision") md += " _(decision)_";
+    if (s.approval) md += " _(approval required)_";
+    md += "\n";
+  }
 
   download(
     new Blob([md], { type: "text/markdown" }),
